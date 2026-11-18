@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>대학병원 간호사 감염관리 의사결정 챗봇</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>🏥 병동 간호사를 위한 입원환자 감염위험 선별 및 보호구 점검 챗봇</h1>
+  <p>질병관리청 의료관련감염 표준예방지침, 다제내성균 관리지침을 기반으로 한 감염위험 선별 및 개인보호구 수행 점검 도구입니다.</p>
+</header>
+
+<main>
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="tab1">1단계: 입원환자 감염위험 선별</button>
+    <button class="tab-btn" data-tab="tab2">2단계: 보호구 수행 점검 (교육)</button>
+  </div>
+
+  <!-- 탭 1 -->
+  <section id="tab1" class="tab-panel active">
+    <div class="card">
+      <h2>📋 신규 입원 환자 감염위험 초기 사정</h2>
+      <div class="grid">
+        <div>
+          <h3>① 입원 정보 사정 (다제내성균 위험 요인)</h3>
+          <div id="mdro-list"></div>
+        </div>
+        <div>
+          <h3>② 증상 사정 (즉시 격리 신호)</h3>
+          <div id="symptom-list"></div>
+        </div>
+      </div>
+    </div>
+    <button class="btn btn-primary" id="btn-screen">🔔 감염 위험도 판정 및 맞춤 대처법 확인</button>
+    <button class="btn btn-reset" id="btn-reset-screen">↺ 체크 항목 초기화</button>
+    <div class="card result" id="output-screen" style="margin-top:18px;"></div>
+  </section>
+
+  <!-- 탭 2 -->
+  <section id="tab2" class="tab-panel">
+    <div class="card">
+      <h2>🛡️ 병실 퇴실 후 개인보호구 탈의 수행 점검</h2>
+      <div class="bot">
+        <div class="avatar">🤖</div>
+        <div class="bubble"><b>챗봇:</b> 병실에서 나오셨나요? 올바른 순서로 보호구를 탈의했는지 점검해 보세요.</div>
+      </div>
+      <div class="context box info" id="ppe-context"></div>
+      <div id="ppe-list"></div>
+    </div>
+    <button class="btn btn-secondary" id="btn-ppe">📝 탈의 수행 점검 및 결과 피드백 확인</button>
+    <div class="card result" id="output-ppe" style="margin-top:18px;"></div>
+  </section>
+</main>
+
+<footer>디지털 헬스케어와 인공지능 · 감염관리 의사결정 챗봇 (교육용)</footer>
+
+<script>
+// =========================================================
+// 1. 감염관리 기준 및 가이드라인 데이터 정의
+// =========================================================
+const MDRO_ITEMS = [
+  ["최근 다른 병원·요양병원에서 전원되었나요?", 1, "타 병원·요양병원 전원"],
+  ["최근 해외 의료기관에서 입원 치료를 받았나요?", 2, "해외 의료기관 입원 치료력"],
+  ["과거 다제내성균(MRSA, VRE, CRE 등) 보균·감염 이력이 있나요?", 2, "다제내성균 보균/감염 이력"],
+  ["최근 항생제를 장기간 사용했나요?", 1, "항생제 장기 사용"],
+  ["도뇨관, 중심정맥관, 기관절개관 등 삽입 기구가 있나요?", 1, "침습적 기구(튜브) 보유"],
+  ["욕창이나 오래된 상처가 있나요?", 1, "욕창 및 만성 상처"],
+];
+
+const SYMPTOM_ITEMS = [
+  ["2주 이상 기침이 있나요? (+발열, 야간 발한, 체중 감소, 혈담)", "결핵", ["공기"], "객담 결핵 검사(AFB 도말/배양/PCR)"],
+  ["발열과 함께 전신에 발진이나 물집(수포)이 있나요?", "홍역·수두", ["공기", "접촉"], "담당의 확인 후 전용 바이러스 검사"],
+  ["발열과 함께 인후통이나 기침 증상이 있나요?", "인플루엔자 등 호흡기 바이러스", ["비말"], "호흡기 바이러스 검사(PCR)"],
+  ["24시간 동안 묽은 변을 3회 이상 보았나요?", "C. difficile 등 감염성 설사", ["접촉"], "C. difficile 독소 검사"],
+  ["손가락 사이나 사타구니가 심하게 가렵고 발진이 있나요?", "옴", ["접촉"], "피부과 진료 의뢰 및 옴 진단 검사"],
+];
+
+const ISOLATION_INFO = {
+  "공기": { room: "음압격리실 (AIIR, 문은 항상 닫힘 유지)", ppe: "N95 이상 마스크 (착용 시마다 사용자 밀착 확인(Seal Check) 필수)" },
+  "비말": { room: "단독 병실 (불가 시 1m 이상 간격 유지 코호트 격리)", ppe: "수술용(외과용) 마스크 (체액 비산 위험 시 보안경/고글 추가)" },
+  "접촉": { room: "단독 병실 (불가 시 동일 균종 코호트 격리)", ppe: "일회용 장갑 + 격리가운" },
+};
+
+const PPE_QUESTIONS = [
+  "1. 오염도가 가장 심한 [장갑]을 가장 먼저 벗으셨습니까?",
+  "2. [고글/안면보호구]의 전면을 만지지 않고 뒤쪽 끈이나 테를 잡고 벗으셨습니까?",
+  "3. [가운]을 벗을 때 오염된 겉면이 안으로 가도록 벗으셨습니까?",
+  "4. 공기주의 환자의 경우 [N95 마스크]는 오염 공기가 없는 병실 밖에서 벗으셨습니까? (미해당 시 선택 불필요)",
+  "5. 모든 보호구를 벗은 후 마지막으로 철저히 [손위생]을 수행하셨습니까?",
+];
+
+// 세션 상태 (Gradio의 gr.State 역할)
+function getInitialState() {
+  return { score: 0, mdro_level: "낮음", mdro_reasons: [], suspects: [], iso_types: [], tests: [], screened: false };
+}
+let state = getInitialState();
+
+// =========================================================
+// 2. 화면 구성
+// =========================================================
+const mdroList = document.getElementById("mdro-list");
+MDRO_ITEMS.forEach(([q, s], i) => {
+  mdroList.insertAdjacentHTML("beforeend",
+    `<label class="check"><input type="checkbox" id="mdro-${i}"><span>${q} <span class="tag">+${s}점</span></span></label>`);
+});
+
+const symptomList = document.getElementById("symptom-list");
+SYMPTOM_ITEMS.forEach(([q, disease], i) => {
+  symptomList.insertAdjacentHTML("beforeend",
+    `<label class="check"><input type="checkbox" id="sym-${i}"><span>${q} <span class="tag">${disease} 의심</span></span></label>`);
+});
+
+const ppeList = document.getElementById("ppe-list");
+PPE_QUESTIONS.forEach((q, i) => {
+  ppeList.insertAdjacentHTML("beforeend", `
+    <div class="q" id="q-wrap-${i}">
+      <div class="q-title">${q}</div>
+      <div class="radios">
+        <label><input type="radio" name="q${i}" value="true">예 (올바름)</label>
+        <label><input type="radio" name="q${i}" value="false">아니오</label>
+      </div>
+    </div>`);
+});
+
+// 탭 전환
+document.querySelectorAll(".tab-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById(btn.dataset.tab).classList.add("active");
+    if (btn.dataset.tab === "tab2") updatePpeContext();
+  });
+});
+
+const unique = arr => [...new Set(arr)];
+
+// =========================================================
+// 3. 핵심 로직: 감염위험 선별 (run_screening)
+// =========================================================
+function runScreening() {
+  let score = 0;
+  const mdroReasons = [];
+  let hasMdroHistory = false;
+
+  MDRO_ITEMS.forEach((item, i) => {
+    if (document.getElementById(`mdro-${i}`).checked) {
+      score += item[1];
+      mdroReasons.push(item[2]);
+      if (["다제내성균 보균/감염 이력", "해외 의료기관 입원 치료력"].includes(item[2])) hasMdroHistory = true;
+    }
+  });
+
+  const suspects = [];
+  const isoTypes = new Set();
+  const tests = [];
+
+  SYMPTOM_ITEMS.forEach((item, i) => {
+    if (document.getElementById(`sym-${i}`).checked) {
+      suspects.push(item[1]);
+      item[2].forEach(t => isoTypes.add(t));
+      tests.push(item[3]);
+    }
+  });
+
+  let mdroLevel, levelClass;
+  if (hasMdroHistory || score >= 3) {
+    mdroLevel = "선제 접촉주의 필요 (고위험)"; levelClass = "high";
+    isoTypes.add("접촉");
+    tests.push("다제내성균 선별검사");
+  } else if (score >= 1) {
+    mdroLevel = "표준주의 + 주의 관찰 (중등도 위험)"; levelClass = "mid";
+  } else {
+    mdroLevel = "표준주의 (저위험)"; levelClass = "low";
+  }
+
+  state = {
+    score, mdro_level: mdroLevel, mdro_reasons: mdroReasons, suspects,
+    iso_types: [...isoTypes], tests: unique(tests), screened: true
+  };
+
+  // 결과 리포트
+  let html = `<h3>🩺 [감염위험 사정 및 위험 판정 결과]</h3><ul>`;
+  html += `<li><b>다제내성균(MDRO) 위험도 평가</b>: <span class="badge ${levelClass}">${mdroLevel}</span> (총점: ${score}점)`;
+  if (mdroReasons.length) html += `<ul><li>보유 위험 요인: ${mdroReasons.join(", ")}</li></ul>`;
+  html += `</li>`;
+  html += `<li><b>즉시 격리 신호 의심 증상</b>: ${suspects.length ? suspects.join(", ") : "없음"}</li></ul>`;
+  html += `<hr><h3>🛡️ [맞춤 대처 프로토콜 (Action Plan)]</h3>`;
+
+  if (mdroLevel === "표준주의 + 주의 관찰 (중등도 위험)") {
+    html += `<div class="box warn">⚠️ <b>중등도 위험 판정 관찰 수칙</b>: 다제내성균 감염 및 전파 가능성이 존재하므로, 환자 처치 전후 손위생을 강화하고 감염 의심 증상(발열, 피부 이상 등)의 발현 여부를 밀착 관찰하여 기록하십시오.</div>`;
+  }
+
+  if (isoTypes.size === 0) {
+    html += `<div class="box ok">✅ <b>표준주의(Standard Precautions) 적용</b>: 모든 환자 처치 전후 철저한 손위생을 실시하고, 체액 노출 위험 시 적절한 기본 개인보호구를 착용하십시오.</div>`;
+  } else {
+    const orderedIso = ["공기", "비말", "접촉"].filter(t => isoTypes.has(t));
+    let ppeArr = orderedIso.map(t => ISOLATION_INFO[t].ppe);
+    if (isoTypes.has("공기") && isoTypes.has("비말")) {
+      ppeArr = ppeArr.filter(p => p !== ISOLATION_INFO["비말"].ppe);
+    }
+    html += `<div class="box danger">
+      🚨 <b>격리 유형</b>: ${orderedIso.join(" + ")}주의 선제적 적용<br>
+      🚪 <b>권고 병실</b>: ${ISOLATION_INFO[orderedIso[0]].room}<br>
+      🧤 <b>필수 개인보호구(PPE)</b>: ${ppeArr.join(", ")}
+    </div>`;
+
+    html += `<p><b>💡 임상 실무 수행 지침:</b></p><ul>`;
+    if (isoTypes.has("공기") || isoTypes.has("비말")) {
+      html += `<li><b>환자 이동</b>: 필수적인 검사 외 이동을 최소화하며, 부득이한 이동 시 환자에게 수술용 마스크를 반드시 착용시킵니다.</li>`;
+    }
+    if (suspects.includes("C. difficile 등 감염성 설사")) {
+      html += `<li><b>손위생 필독</b>: C. difficile 아포(Spore)는 알코올 소독제에 사멸되지 않으므로, 반드시 <b>물과 비누를 사용한 손씻기</b>를 수행하십시오.</li>`;
+    }
+    html += `<li><b>의료기기 관리</b>: 청진기, 체온계, 혈압계 등 의료기기는 가능한 환자 전용으로 지정하여 사용합니다.</li>`;
+    html += `<li><b>보고 및 공유</b>: 감염관리실에 유선으로 선제 격리 사실을 즉시 공유하고 담당의 처방을 확인하십시오.</li></ul>`;
+  }
+
+  if (state.tests.length) {
+    html += `<div class="box info">🧪 <b>추천 진단 검사 및 수검</b>: ${state.tests.join(", ")}</div>`;
+  }
+
+  html += `<p class="note">※ 본 시스템은 질병관리청 의료관련감염 표준예방지침 및 다제내성균 관리지침의 위험요인을 참고하여 구성한 의사결정 보조 도구이며(위험도 점수는 교육용 자체 기준), 최종 격리 해제 및 판단은 감염관리실 협의에 따릅니다.</p>`;
+
+  const out = document.getElementById("output-screen");
+  out.innerHTML = html;
+  out.classList.add("show");
+  out.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// =========================================================
+// 4. 핵심 로직: 보호구 탈의 점검 (evaluate_ppe)
+// =========================================================
+function updatePpeContext() {
+  const isAirborne = state.iso_types.includes("공기");
+  const ctx = document.getElementById("ppe-context");
+  if (!state.screened) {
+    ctx.innerHTML = "ℹ️ 1단계 판정을 먼저 진행하면 환자의 격리 유형에 맞춰 점검 문항이 조정됩니다. (현재: 공기주의 아님으로 간주)";
+  } else {
+    const iso = ["공기", "비말", "접촉"].filter(t => state.iso_types.includes(t));
+    ctx.innerHTML = `ℹ️ 1단계 판정 결과 격리 유형: <b>${iso.length ? iso.join(" + ") + "주의" : "표준주의"}</b>` +
+      (isAirborne ? " — 4번 N95 마스크 문항이 평가에 포함됩니다." : " — 4번 문항은 평가에서 제외됩니다.");
+  }
+  document.getElementById("q-wrap-3").classList.toggle("disabled", !isAirborne);
+}
+
+function getAnswer(i) {
+  const checked = document.querySelector(`input[name="q${i}"]:checked`);
+  return checked ? checked.value === "true" : null;
+}
+
+function evaluatePpe() {
+  const isAirborne = state.iso_types.includes("공기");
+  const ans = [0, 1, 2, 3, 4].map(getAnswer);
+  const total = isAirborne ? 5 : 4;
+  const out = document.getElementById("output-ppe");
+
+  const missing = ans.some((a, i) => a === null && (i !== 3 || isAirborne));
+  if (missing) {
+    out.innerHTML = `<div class="box warn">⚠️ <b>아직 입력하지 않은 문항이 있습니다.</b> 모든 자가 점검 문항에 답변한 후 점검 결과를 확인해 주세요.</div>`;
+    out.classList.add("show");
+    return;
+  }
+
+  let correct = 0;
+  const feedback = [];
+
+  if (ans[0] === true) correct++;
+  else feedback.push("⚠️ <b>1번 (장갑 우선 탈의)</b>: 장갑은 오염도가 가장 높습니다. 오염된 바깥면이 피부에 닿지 않도록 가장 먼저 벗어 바로 폐기해야 합니다.");
+
+  if (ans[1] === true) correct++;
+  else feedback.push("⚠️ <b>2번 (고글/안면보호구 탈의)</b>: 안면보호구의 전면부는 오염 구역입니다. 절대 전면을 만지지 말고 뒤쪽 끈이나 측면 안경테를 잡고 벗으세요.");
+
+  if (ans[2] === true) correct++;
+  else feedback.push("⚠️ <b>3번 (격리가운 탈의)</b>: 가운을 벗을 때는 오염된 겉면이 안으로 가도록 둥글게 말아서 먼지가 날리지 않게 제거해야 합니다.");
+
+  if (isAirborne) {
+    if (ans[3] === true) correct++;
+    else feedback.push("⚠️ <b>4번 (N95 마스크 탈의 위치)</b>: 공기주의 격리 질환의 경우, 병실 내부 공기에 잔여 바이러스/균이 떠다닐 수 있으므로 N95 마스크는 <b>반드시 병실 밖(전실 또는 복도)</b>에서 벗어야 합니다.");
+  }
+
+  if (ans[4] === true) correct++;
+  else feedback.push("⚠️ <b>5번 (최종 손위생)</b>: 보호구 탈의 과정에서 손이 재오염되었을 가능성이 높으므로 최종 손위생은 필수입니다. 또한, <b>탈의 도중이라도 손이 오염되었다면 즉시 중간 손위생</b>을 수행해야 함을 유념하십시오.");
+
+  let html = `<h3 class="score">📊 [보호구 탈의 자가 점검 결과: ${correct}/${total}개 정답]</h3>`;
+  if (!isAirborne) html += `<p class="note">💡 안내: 현재 공기주의 격리가 아니므로 4번 마스크 문항은 평가에서 제외되었습니다.</p>`;
+
+  if (correct === total) {
+    html += `<div class="box ok">🎉 <b>완벽합니다!</b> 질병관리청 표준예방지침에 부합하는 올바른 순서와 방법으로 개인보호구를 안전하게 탈의하셨습니다. 👏</div>`;
+  } else {
+    html += `<div class="box danger">🚨 <b>일부 수행 단계에 대한 교정과 교육이 필요합니다.</b> 안전한 간호 수행을 위해 아래 피드백을 확인해 주세요.</div>`;
+    html += feedback.map(f => `<div class="box warn">${f}</div>`).join("");
+  }
+
+  out.innerHTML = html;
+  out.classList.add("show");
+  out.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+document.getElementById("btn-screen").addEventListener("click", runScreening);
+document.getElementById("btn-ppe").addEventListener("click", evaluatePpe);
+document.getElementById("btn-reset-screen").addEventListener("click", () => {
+  document.querySelectorAll("#tab1 input[type=checkbox]").forEach(c => c.checked = false);
+  document.getElementById("output-screen").classList.remove("show");
+  state = getInitialState();
+});
+</script>
+</body>
+</html>
